@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Leylines Cosmos</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.135/Build/Cesium/Cesium.js"></script>
+  <link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.135/Build/Cesium/Widgets/widgets.css">
+  <style>
+    html, body, #cesium { width:100%; height:100%; margin:0; overflow:hidden; }
+    form { position:absolute; top:8px; left:8px; padding:10px; background:#fff; z-index:1; font:14px sans-serif; }
+    #status { display:block; max-width:650px; }
+  </style>
+</head>
+<body>
+<div id="cesium"></div>
+<form id="controls">
+  <input id="start" type="date" value="1979-11-05" required aria-label="Startdatum">
+  <input id="end" type="date" value="1979-11-05" required aria-label="Enddatum">
+  <input id="token" type="password" placeholder="Cesium ion Token (optional)" aria-label="Cesium ion Token">
+  <button>Laden (gregorianisch)</button>
+  <span id="status">Ohne Token: WGS84. Mit Token: Cesium World Terrain.</span>
+</form>
+<script>
+const viewer = new Cesium.Viewer('cesium', {
+  baseLayer: false, baseLayerPicker: false, geocoder: false,
+  terrainProvider: new Cesium.EllipsoidTerrainProvider(), shouldAnimate: false
+});
+viewer.scene.globe.baseColor = Cesium.Color.DARKSLATEGRAY;
+viewer.scene.globe.depthTestAgainstTerrain = true;
+const status = document.getElementById('status');
+
+function attachEllipsoidPins(source) {
+  for (const ground of source.entities.values.filter(e => e.properties?.pinBody)) {
+    const body = source.entities.getById(ground.properties.pinBody.getValue());
+    ground.position = new Cesium.CallbackPositionProperty((time, result) => {
+      const xyz = body.position.getValue(time);
+      return xyz ? Cesium.Ellipsoid.WGS84.scaleToGeocentricSurface(xyz, result) : undefined;
+    }, false, Cesium.ReferenceFrame.FIXED);
+  }
+}
+
+// Fetch the terrain height at the CURRENT simulation position, not a screen pick.
+// While a height query is pending, hide the pin rather than display a stale tip.
+// Quantisation to milliseconds only coalesces identical rendered timestamps.
+function attachTerrainPins(source, provider) {
+  let generation = 0;
+  let lastKey;
+  let pending = false;
+  const pins = source.entities.values.filter(e => e.properties?.pinBody).map(ground => {
+    const bodyId = ground.properties.pinBody.getValue();
+    const pin = source.entities.getById(bodyId + '_pin');
+    const basePosition = ground.position;
+    const state = { ground, pin, basePosition, tip: undefined, key: undefined };
+    ground.position = new Cesium.CallbackPositionProperty((time, result) => {
+      const key = Cesium.JulianDate.toIso8601(time, 3);
+      return state.key === key && state.tip ? Cesium.Cartesian3.clone(state.tip, result) : undefined;
+    }, false, Cesium.ReferenceFrame.FIXED);
+    pin.polyline.show = new Cesium.CallbackProperty(time =>
+      state.key === Cesium.JulianDate.toIso8601(time, 3) && !!state.tip, false);
+    return state;
+  });
+  return viewer.clock.onTick.addEventListener(async clock => {
+    const time = Cesium.JulianDate.clone(clock.currentTime);
+    const key = Cesium.JulianDate.toIso8601(time, 3);
+    if (pending || key === lastKey) return;
+    pending = true;
+    const currentGeneration = ++generation;
+    const active = pins.map(state => ({state, xyz:state.basePosition.getValue(time)})).filter(p => p.xyz);
+    try {
+      const positions = active.map(p => Cesium.Cartographic.fromCartesian(p.xyz));
+      const sampled = await Cesium.sampleTerrainMostDetailed(provider, positions);
+      if (currentGeneration !== generation) return;
+      active.forEach(({state}, i) => {
+        const point = sampled[i];
+        state.tip = Number.isFinite(point.height) ? Cesium.Cartesian3.fromRadians(
+          point.longitude, point.latitude, point.height) : undefined;
+        state.key = key;
+      });
+      lastKey = key;
+      viewer.scene.requestRender();
+    } catch (error) {
+      status.textContent = 'Terrain-Abfrage fehlgeschlagen: ' + error.message;
+    } finally { pending = false; }
+  });
+}
+
+let detachTerrain;
+document.getElementById('controls').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.submitter;
+  button.disabled = true;
+  viewer.clock.shouldAnimate = false;
+  try {
+    status.textContent = 'Berechne CZML …';
+    const start = document.getElementById('start').value;
+    const end = document.getElementById('end').value;
+    const response = await fetch(`/api/${start}/${end}/gregorian`);
+    if (!response.ok) throw new Error(await response.text());
+    const source = await Cesium.CzmlDataSource.load(await response.json());
+    const token = document.getElementById('token').value.trim();
+    let provider = new Cesium.EllipsoidTerrainProvider();
+    if (token) {
+      Cesium.Ion.defaultAccessToken = token;
+      provider = await Cesium.createWorldTerrainAsync();
+    }
+    if (detachTerrain) detachTerrain();
+    viewer.dataSources.removeAll(true);
+    viewer.terrainProvider = provider;
+    await viewer.dataSources.add(source);
+    if (token) detachTerrain = attachTerrainPins(source, provider);
+    else attachEllipsoidPins(source);
+    status.textContent = token
+      ? 'Terrain aktiv. Pins erscheinen nach der Höhenabfrage; für genaue Betrachtung Zeit pausieren.'
+      : 'WGS84 aktiv. Tierkreis-Sternbilder: Gold; übrige Sternbilder: Blau.';
+  } catch (error) { status.textContent = error.message; }
+  finally { button.disabled = false; }
+});
+</script>
+</body>
+</html>

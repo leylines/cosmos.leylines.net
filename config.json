@@ -1,0 +1,80 @@
+{
+    "satellite": {
+        "Moon" : {
+            "height": 20000000.0,
+            "color": [158, 158, 158, 255]
+        }
+    },
+    "planet": {
+        "Venus" : {
+            "height": 25000000.0,
+            "color": [255, 255, 255, 255]
+        },
+        "Mars" : {
+            "height": 28000000.0,
+            "color": [255, 255, 255, 255]
+        }
+    },
+    "star": {
+        "Sun" : {
+            "height": 30000000.0,
+            "color": [255, 235, 59, 255]
+        },
+        "Alnitak" : {
+            "hip": 26756,
+            "height": 40000000.0
+        },
+        "Alnilam" : {
+            "hip": 26311,
+            "height": 40000000.0
+        },
+        "Mintaka" : {
+            "hip": 25930,
+            "height": 40000000.0
+        },
+        "Sirius" : {
+            "hip": 32349,
+            "height": 40000000.0
+        },
+        "Beteigeuze" : {
+            "hip": 27989,
+            "height": 40000000.0
+        },
+        "Rigel" : {
+            "hip": 24436,
+            "height": 40000000.0
+        },
+        "Alcyone" : {
+            "hip": 17702,
+            "height": 40000000.0
+        },
+        "Atlas" : {
+            "hip": 17847,
+            "height": 40000000.0
+        },
+        "Electra" : {
+            "hip": 17499,
+            "height": 40000000.0
+        },
+        "Maia" : {
+            "hip": 17573,
+            "height": 40000000.0
+        },
+        "Merope" : {
+            "hip": 17608,
+            "height": 40000000.0
+        },
+        "Taygeta" : {
+            "hip": 17531,
+            "height": 40000000.0
+        },
+        "Pleione" : {
+            "hip": 17851,
+            "height": 40000000.0
+        },
+        "Celaeno" : {
+            "hip": 17489,
+            "height": 40000000.0
+        }
+    }
+}

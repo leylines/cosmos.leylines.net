@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.czml
+de422.bsp
+hip_main.dat
+modern_st.json
