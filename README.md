@@ -28,7 +28,7 @@ python3 -m venv .venv
 ## CZML herunterladen
 
 ```sh
-python3 get_cosmos.py --start 1979-11-04 --end 1979-11-06 --output cosmos.czml
+python3 get_cosmos.py --date 1979-11-05 --output cosmos.czml
 ```
 
 Oder direkt:
@@ -36,26 +36,28 @@ Oder direkt:
 ```sh
 curl --fail-with-body http://localhost:8000/api/v1/cosmos.czml \
   -H 'Content-Type: application/json' \
-  -d '{"start_year":1979,"start_month":11,"start_day":5,"end_year":1979,"end_month":11,"end_day":5,"calendar_type":"gregorian"}' \
+  -d '{"year":1979,"month":11,"day":5,"calendar_type":"gregorian"}' \
   -o cosmos.czml
 ```
 
 ### Direkter GET-Aufruf aus dem Globus (empfohlen)
 
 ```text
-https://cosmos.leylines.net/api/1979-11-04/1979-11-06/gregorian
+https://cosmos.leylines.net/api/1979-11-05/gregorian
 ```
 
 Die Route ist implementiert; DNS, HTTPS und Reverse Proxy für die Subdomain
 müssen beim Deployment eingerichtet werden. CORS erlaubt Zugriffe von
 `https://maps.leylines.net`. Download-CLI und Vorschau verwenden jetzt GET.
-Die bisherigen POST-Routen bleiben für vorhandene Clients erhalten.
+Die POST-Routen bleiben erhalten, erwarten jetzt aber ebenfalls nur
+`year`, `month`, `day` statt der bisherigen Start-/Endfelder.
+Die alte GET-Route mit zwei Datumsangaben entfällt.
 
 Beispiel für CesiumJS:
 
 ```js
 const cosmos = await Cesium.CzmlDataSource.load(
-  'https://cosmos.leylines.net/api/1979-11-04/1979-11-06/gregorian'
+  'https://cosmos.leylines.net/api/1979-11-05/gregorian'
 );
 await viewer.dataSources.add(cosmos);
 ```
@@ -86,9 +88,16 @@ geodätisch verbundene projizierte Sterne, nicht um exakte Projektionen
 jedes Zwischenpunkts der geraden Himmelslinien. Dynamische Terrainlinien
 können je nach Cesium-Version und Zahl der Figuren aufwendiger sein.
 
-Der Endtag ist inklusive. Standardkalender der API ist aus Kompatibilitätsgründen
-`julian`; Download-CLI und Vorschau verwenden ausdrücklich `gregorian`.
-Maximal sieben Tage pro Anfrage; `step_seconds`: 60–3600, Standard 300.
+Jede Anfrage berechnet genau einen UTC-Kalendertag mit je einer Stunde
+Puffer davor und danach (normalerweise 26 Stunden). Für `1979-11-05/gregorian`
+reicht die Verfügbarkeit von `1979-11-04T23:00:00Z` bis
+`1979-11-06T01:00:00Z`; die Cesium-Uhr startet am gewählten Tag um 00:00 UTC.
+Bei `julian` wird zuerst das angegebene Kalenderdatum umgerechnet und dann
+derselbe Puffer angewendet. Monats-/Jahreswechsel und Schaltsekunden werden
+berücksichtigt. Die separate Aufgangsauswertung bleibt beim ungepufferten Tag.
+Standardkalender der POST-API ist aus Kompatibilitätsgründen `julian`;
+Download-CLI und Vorschau verwenden ausdrücklich `gregorian`.
+`step_seconds`: 60–3600, Standard 300.
 Kleinere Schritte verbessern die Interpolation, vergrößern aber die Datei.
 
 Weitere Optionen (GET als Query-Parameter; POST als JSON):

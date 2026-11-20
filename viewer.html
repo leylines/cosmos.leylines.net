@@ -14,8 +14,7 @@
 <body>
 <div id="cesium"></div>
 <form id="controls">
-  <input id="start" type="date" value="1979-11-05" required aria-label="Startdatum">
-  <input id="end" type="date" value="1979-11-05" required aria-label="Enddatum">
+  <input id="date" type="date" value="1979-11-05" required aria-label="Datum (plus je eine Stunde Puffer)">
   <input id="token" type="password" placeholder="Cesium ion Token (optional)" aria-label="Cesium ion Token">
   <button>Laden (gregorianisch)</button>
   <span id="status">Ohne Token: WGS84. Mit Token: Cesium World Terrain.</span>
@@ -92,9 +91,8 @@ document.getElementById('controls').addEventListener('submit', async event => {
   viewer.clock.shouldAnimate = false;
   try {
     status.textContent = 'Berechne CZML …';
-    const start = document.getElementById('start').value;
-    const end = document.getElementById('end').value;
-    const response = await fetch(`/api/${start}/${end}/gregorian`);
+    const date = document.getElementById('date').value;
+    const response = await fetch(`/api/${date}/gregorian`);
     if (!response.ok) throw new Error(await response.text());
     const source = await Cesium.CzmlDataSource.load(await response.json());
     const token = document.getElementById('token').value.trim();

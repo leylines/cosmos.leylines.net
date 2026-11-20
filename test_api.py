@@ -3,14 +3,13 @@ import unittest
 import numpy as np
 from fastapi.testclient import TestClient
 
-from main import app, CosmosRequest, generate_czml
+from main import app, CosmosRequest, generate_czml, time_grid
 
 
 class CosmosTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.payload = dict(start_year=1979, start_month=11, start_day=5,
-                           end_year=1979, end_month=11, end_day=5,
+        cls.payload = dict(year=1979, month=11, day=5,
                            calendar_type="gregorian", step_seconds=3600)
         cls.packets = generate_czml(CosmosRequest(**cls.payload))
         cls.by_id = {p["id"]: p for p in cls.packets}
@@ -52,7 +51,7 @@ class CosmosTests(unittest.TestCase):
             values = np.array(position["cartesian"]).reshape(-1, 4)
             self.assertEqual(position["referenceFrame"], "FIXED")
             self.assertEqual(values[0, 0], 0)
-            self.assertEqual(values[-1, 0], 86400)
+            self.assertEqual(values[-1, 0], 26 * 3600)
             self.assertTrue(np.isfinite(values).all())
 
     def test_api_returns_czml_and_errors(self):
@@ -60,7 +59,7 @@ class CosmosTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("application/vnd.cesium.czml+json", response.headers["content-type"])
         self.assertEqual(response.json()[0]["id"], "document")
-        for update in [{"start_month": 13}, {"end_day": 4}, {"end_day": 20},
+        for update in [{"month": 13}, {"month": 2, "day": 30}, {"day": 0},
                        {"calendar_type": "unknown"}, {"step_seconds": 0}]:
             with self.subTest(update=update):
                 self.assertEqual(self.client.post("/api/v1/cosmos.czml",
@@ -116,20 +115,50 @@ class CosmosTests(unittest.TestCase):
             self.assertEqual(any(not p["clampToGround"] for p in lines), mode != "ground")
 
     def test_get_route_cors_and_validation(self):
-        url = "/api/1979-11-05/1979-11-05/gregorian?step_seconds=3600"
+        url = "/api/1979-11-05/gregorian?step_seconds=3600"
         response = self.client.get(url, headers={"Origin": "https://maps.leylines.net"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["access-control-allow-origin"], "https://maps.leylines.net")
         self.assertEqual(response.json(), self.packets)
-        for path in ["/api/1979-13-05/1979-11-05/gregorian",
-                     "/api/invalid/1979-11-05/gregorian", url + "&step_seconds=0",
+        for path in ["/api/1979-13-05/gregorian", "/api/1979-02-29/gregorian",
+                     "/api/invalid/gregorian", url + "&step_seconds=0",
                      url + "&pin_scope=unknown", url + "&constellation_projection=unknown",
-                     "/api/1979-11-05/1979-11-05/unknown"]:
+                     "/api/1979-11-05/unknown"]:
             self.assertEqual(self.client.get(path).status_code, 422, path)
         # A Julian leap date must not be validated as a Gregorian date.
-        response = self.client.get("/api/1900-02-29/1900-02-29/julian?constellation_names=Ori")
+        response = self.client.get("/api/1900-02-29/julian?constellation_names=Ori")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()[0]["clock"]["currentTime"], "1900-03-13T00:00:00Z")
+
+    def test_padded_day_and_clock(self):
+        clock = self.packets[0]["clock"]
+        self.assertEqual(clock["interval"], "1979-11-04T23:00:00Z/1979-11-06T01:00:00Z")
+        self.assertEqual(clock["currentTime"], "1979-11-05T00:00:00Z")
+        for packet in self.packets:
+            if "availability" in packet:
+                self.assertEqual(packet["availability"], clock["interval"])
+            if "position" in packet:
+                self.assertEqual(packet["position"]["epoch"], "1979-11-04T23:00:00Z")
+
+    def test_padding_across_calendar_boundaries(self):
+        cases = [((2026, 1, 1), "2025-12-31T23:00:00Z", "2026-01-02T01:00:00Z"),
+                 ((2024, 2, 29), "2024-02-28T23:00:00Z", "2024-03-01T01:00:00Z"),
+                 ((2026, 12, 31), "2026-12-30T23:00:00Z", "2027-01-01T01:00:00Z")]
+        for (year, month, day), expected_start, expected_end in cases:
+            with self.subTest(date=(year, month, day)):
+                req = CosmosRequest(year=year, month=month, day=day, calendar_type="gregorian")
+                start, end, offsets, _ = time_grid(req)
+                self.assertEqual((start, end), (expected_start, expected_end))
+                self.assertEqual(offsets[-1], 93600)
+
+    def test_leap_second_and_non_dividing_step(self):
+        req = CosmosRequest(year=2016, month=12, day=31, calendar_type="gregorian", step_seconds=3599)
+        start, end, offsets, times = time_grid(req)
+        self.assertEqual(start, "2016-12-30T23:00:00Z")
+        self.assertEqual(end, "2017-01-01T01:00:00Z")
+        self.assertEqual(offsets[-1], 93601)
+        self.assertTrue(np.all(np.diff(offsets) > 0))
+        self.assertEqual(times[-1].utc_iso(), end)
 
     def test_no_pins_keeps_terrain_projections(self):
         packets = generate_czml(CosmosRequest(**self.payload, show_pins=False))

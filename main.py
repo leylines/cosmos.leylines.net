@@ -48,12 +48,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["https://maps.leylines.net"],
 
 
 class CosmosRequest(BaseModel):
-    start_year: int
-    start_month: int
-    start_day: int
-    end_year: int
-    end_month: int
-    end_day: int
+    year: int
+    month: int
+    day: int
     calendar_type: Literal["julian", "gregorian"] = "julian"
     step_seconds: int = Field(default=300, ge=60, le=3600)
     include_bodies: bool = True
@@ -74,25 +71,27 @@ class ConstellationRequest(CosmosRequest):
     constellation_name: str
 
 
-def time_grid(req):
-    dates = []
-    for year, month, day in [(req.start_year, req.start_month, req.start_day),
-                             (req.end_year, req.end_month, req.end_day)]:
-        calendar = convertdate.julian if req.calendar_type == "julian" else convertdate.gregorian
-        if not 1 <= month <= 12 or not 1 <= day <= calendar.month_length(year, month):
-            raise HTTPException(422, "Ungültiges Kalenderdatum")
-        if req.calendar_type == "julian":
-            year, month, day = convertdate.gregorian.from_jd(calendar.to_jd(year, month, day))
-        try:
-            date(year, month, day)
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        dates.append(ts.utc(year, month, day))
-    start, last = dates
-    end = ts.tt_jd(last.tt + 1)
+def calendar_date(req):
+    year, month, day = req.year, req.month, req.day
+    calendar = convertdate.julian if req.calendar_type == "julian" else convertdate.gregorian
+    if not 1 <= month <= 12 or not 1 <= day <= calendar.month_length(year, month):
+        raise HTTPException(422, "Ungültiges Kalenderdatum")
+    if req.calendar_type == "julian":
+        year, month, day = convertdate.gregorian.from_jd(calendar.to_jd(year, month, day))
+    try:
+        date(year, month, day)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return year, month, day
+
+
+def time_grid(req, padding_hours=1):
+    year, month, day = calendar_date(req)
+    # Skyfield normalises hours and days across month/year boundaries and
+    # accounts for leap seconds between these UTC endpoints.
+    start = ts.utc(year, month, day, -padding_hours)
+    end = ts.utc(year, month, day + 1, padding_hours)
     duration = round(float(end.tai - start.tai) * 86400)
-    if duration <= 0 or duration > 7 * 86400 + 1:
-        raise HTTPException(422, "Zeitraum muss 1 bis 7 Tage umfassen (Endtag inklusive)")
     offsets = np.unique(np.append(np.arange(0, duration, req.step_seconds), duration))
     times = ts.tai_jd(start.tai + offsets / 86400)
     return start.utc_iso(), end.utc_iso(), offsets, times
@@ -127,7 +126,7 @@ def generate_czml(req, only_object=None):
     epoch, end, offsets, times = time_grid(req)
     availability = f"{epoch}/{end}"
     packets = [{"id": "document", "version": "1.0", "name": "Leylines Cosmos",
-                "clock": {"interval": availability, "currentTime": epoch,
+                "clock": {"interval": availability, "currentTime": ts.utc(*calendar_date(req)).utc_iso(),
                           "multiplier": 30, "range": "LOOP_STOP",
                           "step": "SYSTEM_CLOCK_MULTIPLIER"}}]
     observer = earth.at(times)
@@ -252,21 +251,18 @@ def cosmos(req: CosmosRequest):
     return czml_response(generate_czml(req))
 
 
-@app.get("/api/{start_date}/{end_date}/{calendar_type}")
-def cosmos_get(start_date: str, end_date: str, calendar_type: Literal["julian", "gregorian"],
+@app.get("/api/{date}/{calendar_type}")
+def cosmos_get(date: str, calendar_type: Literal["julian", "gregorian"],
                step_seconds: int = Query(default=300, ge=60, le=3600),
                include_bodies: bool = True, zodiac_only: bool = False, show_pins: bool = True,
                pin_scope: Literal["bodies", "zodiac", "all"] = "bodies",
                pin_magnitude_limit: float = 3.0,
                constellation_projection: Literal["sky", "ground", "both"] = "both",
                constellation_names: list[str] | None = Query(default=None)):
-    values = {}
-    for prefix, value in [("start", start_date), ("end", end_date)]:
-        match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", value)
-        if not match:
-            raise HTTPException(422, "Datum muss das Format YYYY-MM-DD haben")
-        values.update(zip([f"{prefix}_year", f"{prefix}_month", f"{prefix}_day"],
-                          map(int, match.groups())))
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", date)
+    if not match:
+        raise HTTPException(422, "Datum muss das Format YYYY-MM-DD haben")
+    values = dict(zip(["year", "month", "day"], map(int, match.groups())))
     req = CosmosRequest(**values, calendar_type=calendar_type, step_seconds=step_seconds,
                         include_bodies=include_bodies, zodiac_only=zodiac_only, show_pins=show_pins,
                         pin_scope=pin_scope, pin_magnitude_limit=pin_magnitude_limit,
@@ -305,10 +301,9 @@ class AzimuthRequest(BaseModel):
 @app.post("/api/v1/observer-azimuth")
 def observer_azimuth(req: AzimuthRequest):
     """Retain the observer endpoint (geometric centre crossing, no refraction)."""
-    grid_request = CosmosRequest(start_year=req.year, start_month=req.month, start_day=req.day,
-                                end_year=req.year, end_month=req.month, end_day=req.day,
+    grid_request = CosmosRequest(year=req.year, month=req.month, day=req.day,
                                 calendar_type=req.calendar_type, step_seconds=60)
-    epoch, _, offsets, times = time_grid(grid_request)
+    epoch, _, offsets, times = time_grid(grid_request, padding_hours=0)
     target = None
     for category, objects in config.items():
         for name, settings in objects.items():
