@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
 WORKDIR /app
 
@@ -12,13 +12,19 @@ RUN pip install --no-cache-dir fastapi uvicorn skyfield convertdate pandas
 
 # App-Code kopieren
 COPY main.py ./
-#COPY de422.bsp ./
-#COPY hip_main.dat ./
 COPY config.json ./
-#COPY modern_st.json egyptian_dendera.json babylonian_mulapin.json navajo.json chinese.json ./
 COPY viewer.html ./
 
 # Port freigeben
 EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM base AS local
+
+# Local development
+COPY de422.bsp ./
+COPY hip_main.dat ./
+COPY modern_st.json egyptian_dendera.json babylonian_mulapin.json navajo.json chinese.json ./
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

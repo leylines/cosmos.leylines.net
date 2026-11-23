@@ -93,8 +93,11 @@ class CosmosTests(unittest.TestCase):
         self.assertIsNotNone(response.json()["aufgang_azimut_kompass"])
 
     def test_default_pins_are_only_solar_system(self):
+        from main import config
         pins = {p["id"] for p in self.packets if p["id"].endswith("_pin")}
-        self.assertEqual(pins, {"sun_pin", "moon_pin", "venus_pin", "mars_pin"})
+        expected = {name.lower() + "_pin" for objects in config.values()
+                    for name, settings in objects.items() if "hip" not in settings}
+        self.assertEqual(pins, expected)
 
     def test_zodiac_pins_exclude_other_stars(self):
         from main import constellations, ZODIAC

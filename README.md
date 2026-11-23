@@ -14,8 +14,13 @@ docker run --rm -p 8000:8000 leylines-skyfield
 
 Unter <http://localhost:8000/> liegt die Cesium-Vorschau, unter
 <http://localhost:8000/docs> die API-Dokumentation. Die Vorschau lädt Cesium
-von einem CDN; World Terrain benötigt einen eigenen Cesium-ion-Token mit
-Zugriff auf das Terrain-Asset. Der Token bleibt im Browser.
+von einem CDN und verwendet die mit Cesium gelieferte Natural-Earth-II-Karte.
+Über den Schalter **Re:Earth-Terrain** lässt sich das Terrain auch nach dem
+Laden der CZML-Daten ein-/ausschalten, ohne diese neu abzurufen. Ein
+Cesium-ion-Token ist nicht nötig. Ohne Terrain bleibt das WGS84-Ellipsoid aktiv.
+Der Terrain-Provider wird von `https://terrain.reearth.land/cesium-mesh/ellipsoid`
+mit Vertex-Normalen und Wassermaske geladen. Bei einem Ladefehler fällt die
+Vorschau auf WGS84 zurück.
 
 Alternativ lokal:
 

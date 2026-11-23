@@ -22,18 +22,76 @@
     <option value="navajo">Navajo</option>
     <option value="chinese">Chinesisch (HIP-Teilmenge)</option>
   </select>
-  <input id="token" type="password" placeholder="Cesium ion Token (optional)" aria-label="Cesium ion Token">
+  <label><input id="terrain" type="checkbox"> Re:Earth-Terrain</label>
   <button>Laden (gregorianisch)</button>
-  <span id="status">Ohne Token: WGS84. Mit Token: Cesium World Terrain.</span>
+  <span id="status">Natural Earth II · WGS84. Re:Earth-Terrain bei Bedarf einschalten – kein Token nötig.</span>
 </form>
 <script>
 const viewer = new Cesium.Viewer('cesium', {
-  baseLayer: false, baseLayerPicker: false, geocoder: false,
+  baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+    Cesium.TileMapServiceImageryProvider.fromUrl(
+      Cesium.buildModuleUrl('Assets/Textures/NaturalEarthII')
+    )
+  ),
+  baseLayerPicker: false, geocoder: false,
   terrainProvider: new Cesium.EllipsoidTerrainProvider(), shouldAnimate: false
 });
 viewer.scene.globe.baseColor = Cesium.Color.DARKSLATEGRAY;
 viewer.scene.globe.depthTestAgainstTerrain = true;
 const status = document.getElementById('status');
+const terrainToggle = document.getElementById('terrain');
+const loadButton = document.querySelector('#controls button');
+let terrainPromise;
+let currentSource;
+let currentWarnings;
+let originalGroundPositions = new Map();
+
+function showStatus() {
+  status.textContent = terrainToggle.checked
+    ? 'Natural Earth II · Re:Earth-Terrain aktiv. Für genaue Terrain-Pins Zeit pausieren.'
+    : 'Natural Earth II · WGS84 aktiv. Tierkreis-Sternbilder: Gold; übrige Sternbilder: Blau.';
+  if (currentWarnings) status.textContent += ' Hinweis: ' + currentWarnings;
+}
+
+async function setTerrain(enabled) {
+  let provider = new Cesium.EllipsoidTerrainProvider();
+  if (enabled) {
+    if (!terrainPromise) {
+      terrainPromise = Cesium.CesiumTerrainProvider.fromUrl(
+        'https://terrain.reearth.land/cesium-mesh/ellipsoid',
+        { requestVertexNormals: true, requestWaterMask: true }
+      ).catch(error => { terrainPromise = undefined; throw error; });
+    }
+    provider = await terrainPromise;
+  }
+  if (detachTerrain) { detachTerrain(); detachTerrain = undefined; }
+  viewer.terrainProvider = provider;
+  if (currentSource) {
+    // Restore sampled positions before installing callbacks for the new mode.
+    for (const [ground, position] of originalGroundPositions) {
+      ground.position = position;
+      const bodyId = ground.properties.pinBody.getValue();
+      currentSource.entities.getById(bodyId + '_pin').polyline.show = true;
+    }
+    if (enabled) detachTerrain = attachTerrainPins(currentSource, provider);
+    else attachEllipsoidPins(currentSource);
+  }
+  viewer.scene.requestRender();
+}
+
+terrainToggle.addEventListener('change', async () => {
+  terrainToggle.disabled = true;
+  loadButton.disabled = true;
+  status.textContent = 'Terrain wird umgeschaltet …';
+  try {
+    await setTerrain(terrainToggle.checked);
+    showStatus();
+  } catch (error) {
+    terrainToggle.checked = false;
+    await setTerrain(false);
+    status.textContent = 'Re:Earth konnte nicht geladen werden; WGS84 aktiv. ' + error.message;
+  } finally { terrainToggle.disabled = false; loadButton.disabled = false; }
+});
 
 function attachEllipsoidPins(source) {
   for (const ground of source.entities.values.filter(e => e.properties?.pinBody)) {
@@ -49,6 +107,7 @@ function attachEllipsoidPins(source) {
 // While a height query is pending, hide the pin rather than display a stale tip.
 // Quantisation to milliseconds only coalesces identical rendered timestamps.
 function attachTerrainPins(source, provider) {
+  let disposed = false;
   let generation = 0;
   let lastKey;
   let pending = false;
@@ -65,7 +124,7 @@ function attachTerrainPins(source, provider) {
       state.key === Cesium.JulianDate.toIso8601(time, 3) && !!state.tip, false);
     return state;
   });
-  return viewer.clock.onTick.addEventListener(async clock => {
+  const removeTick = viewer.clock.onTick.addEventListener(async clock => {
     const time = Cesium.JulianDate.clone(clock.currentTime);
     const key = Cesium.JulianDate.toIso8601(time, 3);
     if (pending || key === lastKey) return;
@@ -75,7 +134,7 @@ function attachTerrainPins(source, provider) {
     try {
       const positions = active.map(p => Cesium.Cartographic.fromCartesian(p.xyz));
       const sampled = await Cesium.sampleTerrainMostDetailed(provider, positions);
-      if (currentGeneration !== generation) return;
+      if (disposed || currentGeneration !== generation) return;
       active.forEach(({state}, i) => {
         const point = sampled[i];
         state.tip = Number.isFinite(point.height) ? Cesium.Cartesian3.fromRadians(
@@ -85,9 +144,10 @@ function attachTerrainPins(source, provider) {
       lastKey = key;
       viewer.scene.requestRender();
     } catch (error) {
-      status.textContent = 'Terrain-Abfrage fehlgeschlagen: ' + error.message;
+      if (!disposed) status.textContent = 'Terrain-Abfrage fehlgeschlagen: ' + error.message;
     } finally { pending = false; }
   });
+  return () => { disposed = true; removeTick(); };
 }
 
 let detachTerrain;
@@ -95,6 +155,7 @@ document.getElementById('controls').addEventListener('submit', async event => {
   event.preventDefault();
   const button = event.submitter;
   button.disabled = true;
+  terrainToggle.disabled = true;
   viewer.clock.shouldAnimate = false;
   try {
     status.textContent = 'Berechne CZML …';
@@ -103,26 +164,24 @@ document.getElementById('controls').addEventListener('submit', async event => {
     const response = await fetch(`/api/${date}/gregorian?skyculture=${encodeURIComponent(culture)}`);
     if (!response.ok) throw new Error(await response.text());
     const packets = await response.json();
-    const warnings = packets[0].properties?.warnings;
     const source = await Cesium.CzmlDataSource.load(packets);
-    const token = document.getElementById('token').value.trim();
-    let provider = new Cesium.EllipsoidTerrainProvider();
-    if (token) {
-      Cesium.Ion.defaultAccessToken = token;
-      provider = await Cesium.createWorldTerrainAsync();
-    }
-    if (detachTerrain) detachTerrain();
+    if (detachTerrain) { detachTerrain(); detachTerrain = undefined; }
     viewer.dataSources.removeAll(true);
-    viewer.terrainProvider = provider;
     await viewer.dataSources.add(source);
-    if (token) detachTerrain = attachTerrainPins(source, provider);
-    else attachEllipsoidPins(source);
-    status.textContent = token
-      ? 'Terrain aktiv. Pins erscheinen nach der Höhenabfrage; für genaue Betrachtung Zeit pausieren.'
-      : 'WGS84 aktiv. Tierkreis-Sternbilder: Gold; übrige Sternbilder: Blau.';
-    if (warnings) status.textContent += ' Hinweis: ' + warnings;
+    currentSource = source;
+    currentWarnings = packets[0].properties?.warnings;
+    originalGroundPositions = new Map(source.entities.values
+      .filter(entity => entity.properties?.pinBody).map(entity => [entity, entity.position]));
+    try {
+      await setTerrain(terrainToggle.checked);
+      showStatus();
+    } catch (error) {
+      terrainToggle.checked = false;
+      await setTerrain(false);
+      status.textContent = 'Re:Earth konnte nicht geladen werden; WGS84 aktiv. ' + error.message;
+    }
   } catch (error) { status.textContent = error.message; }
-  finally { button.disabled = false; }
+  finally { button.disabled = false; terrainToggle.disabled = false; }
 });
 </script>
 </body>
