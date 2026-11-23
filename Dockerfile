@@ -11,12 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir fastapi uvicorn skyfield convertdate pandas
 
 # App-Code kopieren
-COPY main.py .
-#COPY de422.bsp .
-#COPY hip_main.dat .
-COPY config.json .
-#COPY modern_st.json .
-COPY viewer.html .
+COPY main.py ./
+#COPY de422.bsp ./
+#COPY hip_main.dat ./
+COPY config.json ./
+#COPY modern_st.json egyptian_dendera.json babylonian_mulapin.json navajo.json chinese.json ./
+COPY viewer.html ./
 
 # Port freigeben
 EXPOSE 8000

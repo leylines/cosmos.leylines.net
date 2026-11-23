@@ -9,6 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", default="1979-11-05", help="Kalenderdatum YYYY-MM-DD (plus je 1 Stunde Puffer)")
     parser.add_argument("--calendar", choices=["gregorian", "julian"], default="gregorian")
+    parser.add_argument("--skyculture", choices=["modern_st", "egyptian_dendera", "babylonian_mulapin", "navajo", "chinese"], default="modern_st")
     parser.add_argument("--url", default="http://127.0.0.1:8000")
     parser.add_argument("--output", default="cosmos.czml")
     parser.add_argument("--step", type=int, default=300)
@@ -17,7 +18,8 @@ def main():
     parser.add_argument("--projection", choices=["sky", "ground", "both"], default="both")
     args = parser.parse_args()
     query = urlencode({"step_seconds": args.step, "zodiac_only": str(args.zodiac_only).lower(),
-                       "pin_scope": args.pin_scope, "constellation_projection": args.projection})
+                       "pin_scope": args.pin_scope, "constellation_projection": args.projection,
+                       "skyculture": args.skyculture})
     request = Request(f"{args.url.rstrip('/')}/api/{args.date}/{args.calendar}?{query}")
     with urlopen(request, timeout=600) as response:
         Path(args.output).write_bytes(response.read())

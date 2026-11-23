@@ -18,7 +18,10 @@ from skyfield.framelib import itrs
 
 BASE = Path(__file__).resolve().parent
 config = json.loads((BASE / "config.json").read_text())
-constellations = json.loads((BASE / "modern_st.json").read_text())["constellations"]
+Skyculture = Literal["modern_st", "egyptian_dendera", "babylonian_mulapin", "navajo", "chinese"]
+SKYCULTURES = ("modern_st", "egyptian_dendera", "babylonian_mulapin", "navajo", "chinese")
+sky_cultures = {name: json.loads((BASE / f"{name}.json").read_text()) for name in SKYCULTURES}
+constellations = sky_cultures["modern_st"]["constellations"]
 eph = load(str(BASE / "de422.bsp"))
 with (BASE / "hip_main.dat").open("rb") as catalog:
     stars = hipparcos.load_dataframe(catalog)
@@ -52,6 +55,7 @@ class CosmosRequest(BaseModel):
     month: int
     day: int
     calendar_type: Literal["julian", "gregorian"] = "julian"
+    skyculture: Skyculture = "modern_st"
     step_seconds: int = Field(default=300, ge=60, le=3600)
     include_bodies: bool = True
     constellation_names: list[str] | None = None  # None: all; []: none
@@ -122,28 +126,65 @@ def line_packet(entity_id, name, references, color, availability, width=1):
                          "material": {"solidColor": {"color": {"rgba": color}}}}}
 
 
+def culture_constellations(culture):
+    """Keep HIP runs intact; never bridge over an unresolved Gaia/DSO reference."""
+    result, warnings = [], []
+    for original in sky_cultures[culture]["constellations"]:
+        lines = []
+        for path in original.get("lines", []):
+            run = []
+            for reference in path:
+                if type(reference) is int and reference in stars.index:
+                    if not run or run[-1] != reference:
+                        run.append(reference)
+                else:
+                    if run:
+                        lines.append(run)
+                    run = []
+                    warnings.append(f"{original['id']}: unsupported reference {reference}")
+            if run:
+                lines.append(run)
+        if lines:
+            result.append({**original, "lines": lines})
+    return result, list(dict.fromkeys(warnings))
+
+
+def constellation_name(constellation):
+    names = constellation.get("common_name", {})
+    return names.get("native") or names.get("english") or constellation["id"]
+
+
+def is_zodiac(constellation, culture):
+    # Only these two supplied files explicitly identify the twelve figures.
+    return culture in ("modern_st", "egyptian_dendera") and constellation["id"].split()[-1] in ZODIAC
+
+
 def generate_czml(req, only_object=None):
+    if req.zodiac_only and req.skyculture not in ("modern_st", "egyptian_dendera"):
+        raise HTTPException(422, "zodiac_only ist nur für modern_st und egyptian_dendera definiert")
+    available, warnings = culture_constellations(req.skyculture)
     epoch, end, offsets, times = time_grid(req)
     availability = f"{epoch}/{end}"
     packets = [{"id": "document", "version": "1.0", "name": "Leylines Cosmos",
+                "properties": {"skyculture": req.skyculture, "warnings": "; ".join(warnings)},
                 "clock": {"interval": availability, "currentTime": ts.utc(*calendar_date(req)).utc_iso(),
                           "multiplier": 30, "range": "LOOP_STOP",
                           "step": "SYSTEM_CLOCK_MULTIPLIER"}}]
     observer = earth.at(times)
     added = set()
-    selected = constellations
+    selected = available
     if req.constellation_names is not None:
         selected = []
         for requested in req.constellation_names:
-            found = [c for c in constellations if requested.casefold() in
-                     {c["common_name"]["native"].casefold(), c["common_name"]["english"].casefold(),
-                      c["id"].split()[-1].casefold()}]
+            found = [c for c in available if requested.casefold() in
+                     {str(value).casefold() for value in [*c.get("common_name", {}).values(),
+                                                          c["id"], c["id"].split()[-1]]}]
             if not found:
                 raise HTTPException(404, f"Sternbild nicht gefunden: {requested}")
             selected.extend(c for c in found if c not in selected)
     if req.zodiac_only:
-        selected = [c for c in selected if c["id"].split()[-1] in ZODIAC]
-    zodiac_hips = {hip for c in selected if c["id"].split()[-1] in ZODIAC
+        selected = [c for c in selected if is_zodiac(c, req.skyculture)]
+    zodiac_hips = {hip for c in selected if is_zodiac(c, req.skyculture)
                    for path in c["lines"] for hip in path}
     projected_hips = {hip for c in selected for path in c["lines"] for hip in path}
 
@@ -213,16 +254,19 @@ def generate_czml(req, only_object=None):
 
     for constellation in selected:
         abbreviation = constellation["id"].split()[-1]
-        zodiac = abbreviation in ZODIAC
+        zodiac = is_zodiac(constellation, req.skyculture)
         if req.zodiac_only and not zodiac:
             continue
-        name = constellation["common_name"]["native"]
-        parent = "constellation_" + abbreviation
+        name = constellation_name(constellation)
+        parent = "constellation_" + ("" if req.skyculture == "modern_st" else req.skyculture + "_") + abbreviation
         packets.append({"id": parent, "name": name,
-                        "properties": {"zodiac": zodiac, "abbreviation": abbreviation}})
+                        "properties": {"zodiac": zodiac, "abbreviation": abbreviation,
+                                       "skyculture": req.skyculture}})
         for index, path in enumerate(constellation["lines"]):
             for hip in path:
                 add_star(hip)
+            if len(path) < 2:
+                continue  # Single-star asterisms need a star, not a zero-length polyline.
             color = [255, 200, 80, 210] if zodiac else [130, 170, 255, 150]
             if req.constellation_projection in ("sky", "both"):
                 packet = line_packet(f"{parent}_{index}", name,
@@ -253,6 +297,7 @@ def cosmos(req: CosmosRequest):
 
 @app.get("/api/{date}/{calendar_type}")
 def cosmos_get(date: str, calendar_type: Literal["julian", "gregorian"],
+               skyculture: Skyculture = "modern_st",
                step_seconds: int = Query(default=300, ge=60, le=3600),
                include_bodies: bool = True, zodiac_only: bool = False, show_pins: bool = True,
                pin_scope: Literal["bodies", "zodiac", "all"] = "bodies",
@@ -263,7 +308,7 @@ def cosmos_get(date: str, calendar_type: Literal["julian", "gregorian"],
     if not match:
         raise HTTPException(422, "Datum muss das Format YYYY-MM-DD haben")
     values = dict(zip(["year", "month", "day"], map(int, match.groups())))
-    req = CosmosRequest(**values, calendar_type=calendar_type, step_seconds=step_seconds,
+    req = CosmosRequest(**values, calendar_type=calendar_type, skyculture=skyculture, step_seconds=step_seconds,
                         include_bodies=include_bodies, zodiac_only=zodiac_only, show_pins=show_pins,
                         pin_scope=pin_scope, pin_magnitude_limit=pin_magnitude_limit,
                         constellation_projection=constellation_projection,

@@ -78,6 +78,55 @@ sowohl am Himmel als auch als bewegliche Terrainlinien. Query-Parameter:
 ausgewählten Tierkreisfiguren), `all` (zusätzlich alle hellen Sterne).
 Die Helligkeitsgrenze für Stern-Pins gilt weiterhin.
 
+### Himmelskulturen (Stellarium)
+
+Mit `skyculture` wählst du die Sternbildfiguren; Standard bleibt `modern_st`:
+
+```text
+https://cosmos.leylines.net/api/0840-05-05/julian?skyculture=egyptian_dendera
+```
+
+```sh
+python3 get_cosmos.py --date 0840-05-05 --calendar julian --skyculture egyptian_dendera
+```
+
+| `skyculture` | Figuren aus `constellations` | Hinweise |
+|---|---:|---|
+| `modern_st` | 88 | Zwölf klassische Tierkreisfiguren |
+| `egyptian_dendera` | 34 | Zwölf Tierkreisfiguren nach den expliziten Kürzeln der Datei |
+| `babylonian_mulapin` | 58 | Keine automatische Zuordnung zum modernen Tierkreis |
+| `navajo` | 8 | Englische Namen als Rückfall |
+| `chinese` | 309 von 312 | HIP-Teilmenge, siehe Einschränkungen unten |
+
+Der Parameter gilt für GET und alle CZML-POST-Routen (JSON-Feld `skyculture`).
+Auch die Vorschau bietet eine Auswahl. `constellation_names` sucht innerhalb
+der gewählten Kultur nach einheimischen/englischen Namen, Aussprache, kompletter
+Stellarium-ID oder letztem ID-Teil (z. B. `Ari` oder `001`). Für die Anzeige gilt:
+einheimischer Name → englischer Name → ID. Unbekannte Kulturen werden mit HTTP 422
+abgelehnt; Dateipfade können nicht als Kultur übergeben werden.
+
+`zodiac_only=true` ist nur für `modern_st` und `egyptian_dendera` definiert;
+bei den übrigen Kulturen antwortet die API mit HTTP 422, statt fremde Figuren
+willkürlich den zwölf westlichen Zeichen zuzuordnen. Dort aktiviert auch
+`pin_scope=zodiac` keine zusätzlichen Stern-Pins. Die konfigurierten Körper und
+zusätzlichen Sterne aus `config.json` bleiben unabhängig von der Kultur erhalten.
+
+**Chinesische Daten:** Die Datei enthält neben HIP-Nummern eine Gaia-ID
+(`5350358584482202880`) und drei Deep-Sky-Objekte (`NGC2632`, `NGC6231`, `NGC6475`).
+Diese können mit `hip_main.dat` nicht berechnet werden. Linien werden an solchen
+Referenzen unterbrochen, niemals über die Lücke verbunden. Die drei ausschließlich
+aus Deep-Sky-Referenzen bestehenden Figuren entfallen; die übrigen 309 bleiben
+erhalten. Hinweise stehen im CZML-Dokument unter `properties.warnings` und werden
+in der Vorschau angezeigt. Ein-Stern-Figuren werden als Sterne ohne degenerierte
+Linien dargestellt. Die chinesische Kultur enthält wesentlich mehr Figuren und
+kann größere Dateien und höhere Renderlast verursachen.
+
+Es werden die HIP-Sterne und Linien aus `constellations` übernommen, nicht
+Illustrationen, Sternbildgrenzen, das chinesische Mondstationssystem oder separate
+Hilfslinien aus `asterisms`. Kulturelle Datierungsangaben begrenzen die gewählte
+Berechnungszeit nicht automatisch. Die fünf Kulturdateien werden im Docker-Image
+mitgeliefert; bestehende Mounts für Ephemeriden und Sternkatalog bleiben unverändert.
+
 Terrainlinien referenzieren eigene, zeitabhängige Bodenprojektionen der
 HIP-Sterne. `clampToGround: true` und `arcType: GEODESIC` legen die Linien
 auf das Terrain des empfangenden Cesium-Viewers. Dafür sind weder ein

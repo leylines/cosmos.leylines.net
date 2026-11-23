@@ -15,6 +15,13 @@
 <div id="cesium"></div>
 <form id="controls">
   <input id="date" type="date" value="1979-11-05" required aria-label="Datum (plus je eine Stunde Puffer)">
+  <select id="skyculture" aria-label="Himmelskultur">
+    <option value="modern_st">Modern (S&amp;T)</option>
+    <option value="egyptian_dendera">Ägyptisch – Dendera</option>
+    <option value="babylonian_mulapin">Babylonisch – MUL.APIN</option>
+    <option value="navajo">Navajo</option>
+    <option value="chinese">Chinesisch (HIP-Teilmenge)</option>
+  </select>
   <input id="token" type="password" placeholder="Cesium ion Token (optional)" aria-label="Cesium ion Token">
   <button>Laden (gregorianisch)</button>
   <span id="status">Ohne Token: WGS84. Mit Token: Cesium World Terrain.</span>
@@ -92,9 +99,12 @@ document.getElementById('controls').addEventListener('submit', async event => {
   try {
     status.textContent = 'Berechne CZML …';
     const date = document.getElementById('date').value;
-    const response = await fetch(`/api/${date}/gregorian`);
+    const culture = document.getElementById('skyculture').value;
+    const response = await fetch(`/api/${date}/gregorian?skyculture=${encodeURIComponent(culture)}`);
     if (!response.ok) throw new Error(await response.text());
-    const source = await Cesium.CzmlDataSource.load(await response.json());
+    const packets = await response.json();
+    const warnings = packets[0].properties?.warnings;
+    const source = await Cesium.CzmlDataSource.load(packets);
     const token = document.getElementById('token').value.trim();
     let provider = new Cesium.EllipsoidTerrainProvider();
     if (token) {
@@ -110,6 +120,7 @@ document.getElementById('controls').addEventListener('submit', async event => {
     status.textContent = token
       ? 'Terrain aktiv. Pins erscheinen nach der Höhenabfrage; für genaue Betrachtung Zeit pausieren.'
       : 'WGS84 aktiv. Tierkreis-Sternbilder: Gold; übrige Sternbilder: Blau.';
+    if (warnings) status.textContent += ' Hinweis: ' + warnings;
   } catch (error) { status.textContent = error.message; }
   finally { button.disabled = false; }
 });

@@ -165,6 +165,69 @@ class CosmosTests(unittest.TestCase):
         self.assertFalse(any(p["id"].endswith("_pin") for p in packets))
         self.assertTrue(any(p.get("polyline", {}).get("clampToGround") for p in packets))
 
+    def test_all_skycultures(self):
+        expected = {"modern_st": 88, "egyptian_dendera": 34, "babylonian_mulapin": 58,
+                    "navajo": 8, "chinese": 309}
+        for culture, count in expected.items():
+            with self.subTest(culture=culture):
+                response = self.client.get(f"/api/0840-05-05/julian?skyculture={culture}&step_seconds=3600")
+                self.assertEqual(response.status_code, 200)
+                packets = response.json()
+                by_id = {p["id"]: p for p in packets}
+                self.assertEqual(len(by_id), len(packets))
+                self.assertEqual(packets[0]["properties"]["skyculture"], culture)
+                groups = [p for p in packets if "zodiac" in p.get("properties", {})]
+                self.assertEqual(len(groups), count)
+                self.assertTrue(all(p["name"] for p in groups))
+                self.assertEqual(sum(p["properties"]["zodiac"] for p in groups),
+                                 12 if culture in ("modern_st", "egyptian_dendera") else 0)
+                for packet in packets:
+                    if "position" in packet:
+                        self.assertTrue(np.isfinite(packet["position"]["cartesian"]).all())
+                    if "polyline" in packet:
+                        references = packet["polyline"]["positions"]["references"]
+                        self.assertGreaterEqual(len(references), 2)
+                        self.assertTrue(all(a != b for a, b in zip(references, references[1:])))
+                        for reference in references:
+                            self.assertIn("position", by_id[reference.split("#")[0]])
+
+    def test_chinese_unsupported_references_break_lines(self):
+        from main import culture_constellations
+        figures, warnings = culture_constellations("chinese")
+        self.assertEqual(len(warnings), 4)
+        figure = next(c for c in figures if c["id"] == "CON chinese 090")
+        self.assertIn([51232], figure["lines"])
+        self.assertIn([56606, 56561, 57363], figure["lines"])
+        self.assertFalse(any(51232 in path and 56606 in path for path in figure["lines"]))
+        self.assertTrue(all(type(hip) is int for c in figures for path in c["lines"] for hip in path))
+        self.assertTrue(any("DSO:NGC2632" in warning for warning in warnings))
+
+    def test_culture_validation_and_name_fallbacks(self):
+        url = "/api/0840-05-05/julian"
+        for culture in ["missing", "../config", "config.json"]:
+            self.assertEqual(self.client.get(url, params={"skyculture": culture}).status_code, 422)
+        response = self.client.post("/api/v1/cosmos.czml", json=self.payload | {"skyculture": "missing"})
+        self.assertEqual(response.status_code, 422)
+        for culture, name in [("egyptian_dendera", "Thigh of Bull"), ("navajo", "Revolving Male")]:
+            response = self.client.get(url, params={"skyculture": culture, "constellation_names": name})
+            self.assertEqual(response.status_code, 200)
+            groups = [p for p in response.json() if "zodiac" in p.get("properties", {})]
+            self.assertEqual(len(groups), 1)
+            self.assertEqual(groups[0]["name"], name)
+        response = self.client.get(url, params={"skyculture": "egyptian_dendera", "zodiac_only": "true"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(sum("zodiac" in p.get("properties", {}) for p in response.json()), 12)
+        response = self.client.get(url, params={"skyculture": "chinese", "zodiac_only": "true"})
+        self.assertEqual(response.status_code, 422)
+
+    def test_post_culture_selection(self):
+        response = self.client.post("/api/v1/constellation-positions", json=self.payload | {
+            "skyculture": "egyptian_dendera", "constellation_name": "Ari"})
+        self.assertEqual(response.status_code, 200)
+        groups = [p for p in response.json() if "zodiac" in p.get("properties", {})]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["name"], "Aries")
+
 
 if __name__ == "__main__":
     unittest.main()
